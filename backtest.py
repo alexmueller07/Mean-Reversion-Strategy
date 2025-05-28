@@ -1,3 +1,10 @@
+"""
+NOTE:
+HIGHLY RECOMMENDED TO BE RUN IN A JUPYTER NOTEBOOK. 
+This code is not ready to run, it is just a collection of defined functions you, the user, can use to backtest the strategy. 
+Read the descriptions to each function and you can use it to backtest and tune the model to your own preferences. 
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
