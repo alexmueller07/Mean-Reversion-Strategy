@@ -25,7 +25,7 @@ This project implements a pairs trading strategy that:
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/pairsStrategy.git
+git clone https://github.com/alexmueller07/pairsStrategy.git
 cd pairsStrategy
 ```
 
