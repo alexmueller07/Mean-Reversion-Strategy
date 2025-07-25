@@ -86,3 +86,12 @@ MIT License
 ## Disclaimer
 
 This software is for educational purposes only. Do not risk money which you are afraid to lose. USE THE SOFTWARE AT YOUR OWN RISK. THE AUTHORS AND ALL AFFILIATES ASSUME NO RESPONSIBILITY FOR YOUR TRADING RESULTS.
+
+## Author
+
+Alexander Mueller
+
+- GitHub: [alexmueller07](https://github.com/alexmueller07)
+- LinkedIn: [Alexander Mueller](https://www.linkedin.com/in/alexander-mueller-021658307/)
+- Email: amueller.code@gmail.com
+
