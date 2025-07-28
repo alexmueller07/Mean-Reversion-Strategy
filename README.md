@@ -20,6 +20,10 @@ This project implements a pairs trading strategy that:
 - Backtesting capabilities
 - Risk management through position sizing
 
+## Automation 
+
+The automation is already set up in '.github/workflows/main.yml'. Just make sure to save that automation script and to add your Alpaca API Keys as a action secret in the settings and it will automatically execute trades on that account.
+
 ## Installation
 
 1. Clone the repository:
