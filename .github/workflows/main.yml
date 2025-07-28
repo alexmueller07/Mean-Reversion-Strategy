@@ -2,8 +2,8 @@ name: Run Mean Reversion Trading Bot
 
 on:
   schedule:
-    # Runs at 9:30 AM EST / 14:30 UTC, Monday–Friday
-    - cron: '30 14 * * 1-5'
+    # Runs at 9:30 AM EST / 13:30 UTC, Monday–Friday
+    - cron: '30 13 * * 1-5'
 
 jobs:
   trade:
@@ -27,7 +27,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance alpaca-trade-api pandas numpy pytz
+          pip install -r requirements.txt
+
 
       - name: Run trading bot
         run: python main.py
