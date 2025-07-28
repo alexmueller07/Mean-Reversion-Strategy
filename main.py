@@ -1,10 +1,11 @@
 import yfinance as yf
 import time
 import os
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import pandas as pd
 import numpy as np
 import alpaca_trade_api as tradeapi
+import pytz
 from config import (
     ALPACA_API_KEY,
     ALPACA_SECRET_KEY,
@@ -17,8 +18,15 @@ from config import (
 # Initialize Alpaca API
 api = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
 
+# Timezone
+EST = pytz.timezone('US/Eastern')
+
+# Track current positions
+current_positions = {ticker: 0 for ticker in TICKERS}
+
 def download_ticker_data(ticker):
-    data = yf.download(ticker, period="8d", interval="1m", progress=False)
+    """Download minute-level price data and save as CSV."""
+    data = yf.download(ticker, period="8d", interval="1m", progress=False, auto_adjust=True)
     data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data_dir = os.path.join(os.path.dirname(__file__), "data")
     os.makedirs(data_dir, exist_ok=True)
@@ -27,16 +35,11 @@ def download_ticker_data(ticker):
     return True
 
 def SMA(data, period=SMA_PERIOD, column="Close"):
+    """Calculate Simple Moving Average."""
     return data[column].rolling(window=period).mean()
 
-current_positions = {ticker: 0 for ticker in TICKERS}
-
-from datetime import datetime, time
-import pytz
-
-EST = pytz.timezone('US/Eastern')
-
 def close_all_positions():
+    """Close all currently open Alpaca positions."""
     positions = api.list_positions()
     for position in positions:
         symbol = position.symbol
@@ -48,15 +51,14 @@ def close_all_positions():
         except Exception as e:
             print(f"Error closing position on {symbol}: {e}")
 
-
 def main():
-    stop_time = time(15, 25)  # 3:25 PM
-    
+    stop_time = dt_time(15, 25)  # 3:25 PM EST
+
     while True:
-        now = datetime.now(EST).time()  # Current time in EST
-        
+        now = datetime.now(EST).time()
+
         if now >= stop_time:
-            print("Reached 3:55 PM EST, stopping trading and closing positions.")
+            print("Reached stop time, closing all positions and stopping trading.")
             close_all_positions()
             break
 
@@ -68,13 +70,15 @@ def main():
         percentile_values = {}
 
         for ticker in TICKERS:
-            df = pd.read_csv(f'data/{ticker}.csv').iloc[2:].drop(columns=['timestamp'])
-            df.set_index('Price', inplace=True)
-            df = df.astype(float)
+            df = pd.read_csv(f'data/{ticker}.csv').iloc[2:]
+            df = df.astype(float, errors='ignore')
+            df.set_index('Datetime', inplace=True)
+
             df["SMA"] = SMA(df)
-            df["Simple_Returns"] = df.pct_change(1)['Close']
-            df["Log_Returns"] = np.log(1 + df["Simple_Returns"])
+            df["Simple_Returns"] = df["Close"].pct_change()
+            df["Log_Returns"] = np.log1p(df["Simple_Returns"])
             df["Ratios"] = df['Close'] / df["SMA"]
+
             ratio_series = df["Ratios"].dropna()
             ratios[ticker] = ratio_series
             percentile_values[ticker] = np.percentile(ratio_series, PERCENTILES)
@@ -97,46 +101,47 @@ def main():
 
             try:
                 if last_pos == 1:
-                    pos_size_pct = 100 * min(2, 0.25 * ((buy - current_ratio) / (buy - percentile_values[ticker][1])))
+                    pos_size_pct = 100 * min(2, 0.25 * ((buy - current_ratio) / max((buy - percentile_values[ticker][1]), 1e-6)))
                     dollar_amt = equity * (pos_size_pct / 100.0)
                     qty = int(dollar_amt // current_close)
 
                     if current_positions[ticker] < 0:
-                        print(f"=== PLEASE FULLY CLOSE THE CURRENT SHORT POSITION OF {-current_positions[ticker]} UNITS OF {ticker} ===")
-                        api.submit_order(symbol=ticker, qty=abs(int(current_positions[ticker])), side='buy', type='market', time_in_force='gtc')
+                        print(f"Closing current short position of {-current_positions[ticker]} shares for {ticker}")
+                        api.submit_order(symbol=ticker, qty=abs(current_positions[ticker]), side='buy', type='market', time_in_force='gtc')
                         current_positions[ticker] = 0
 
                     if qty >= 1:
                         api.submit_order(symbol=ticker, qty=qty, side='buy', type='market', time_in_force='gtc')
                         current_positions[ticker] += qty
-                        print(f"=== NEW LONG POSITION ON {ticker} GOING LONG @{current_close:.2f} WITH SIZE: {qty} SHARES | TOTAL POS: {current_positions[ticker]} ===")
+                        print(f"Opened LONG position for {ticker}: {qty} shares at ${current_close:.2f}")
 
                 elif last_pos == -1:
-                    pos_size_pct = 100 * min(2, 0.25 * ((current_ratio - sell) / (percentile_values[ticker][3] - sell)))
+                    pos_size_pct = 100 * min(2, 0.25 * ((current_ratio - sell) / max((percentile_values[ticker][3] - sell), 1e-6)))
                     dollar_amt = equity * (pos_size_pct / 100.0)
                     qty = int(dollar_amt // current_close)
 
                     if current_positions[ticker] > 0:
-                        print(f"=== PLEASE FULLY CLOSE THE CURRENT LONG POSITION OF {current_positions[ticker]} UNITS OF {ticker} ===")
-                        api.submit_order(symbol=ticker, qty=int(current_positions[ticker]), side='sell', type='market', time_in_force='gtc')
+                        print(f"Closing current long position of {current_positions[ticker]} shares for {ticker}")
+                        api.submit_order(symbol=ticker, qty=current_positions[ticker], side='sell', type='market', time_in_force='gtc')
                         current_positions[ticker] = 0
 
                     if qty >= 1:
                         api.submit_order(symbol=ticker, qty=qty, side='sell', type='market', time_in_force='gtc')
                         current_positions[ticker] -= qty
-                        print(f"=== NEW SHORT POSITION ON {ticker} GOING SHORT @{current_close:.2f} WITH SIZE: {qty} SHARES | TOTAL POS: {current_positions[ticker]} ===")
-            except Exception as e:
-                print(f"ERROR WITH EXECUTING ALPACA ORDER ON {ticker}: {str(e)}")
+                        print(f"Opened SHORT position for {ticker}: {qty} shares at ${current_close:.2f}")
 
-        print("----------------------------------------") 
-        print("-------- Current Open Positions --------")
-        for ticker in TICKERS:
-            if current_positions[ticker] > 0:
-                print(f"{ticker}: Long Position | {current_positions[ticker]} shares")
-            elif current_positions[ticker] < 0:
-                print(f"{ticker}: Short Position | {abs(current_positions[ticker])} shares")
+            except Exception as e:
+                print(f"Error executing order for {ticker}: {str(e)}")
+
         print("----------------------------------------")
-        print("===== REP FINISHED | SLEEPING FOR 60 SECONDS BEFORE NEXT REP =====")
+        print("-------- Current Open Positions --------")
+        for ticker, pos in current_positions.items():
+            if pos > 0:
+                print(f"{ticker}: LONG | {pos} shares")
+            elif pos < 0:
+                print(f"{ticker}: SHORT | {-pos} shares")
+        print("----------------------------------------")
+        print("===== Loop finished. Sleeping 60 seconds =====")
         time.sleep(60)
 
 if __name__ == "__main__":
