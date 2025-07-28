@@ -72,12 +72,23 @@ def main():
         for ticker in TICKERS:
             df = pd.read_csv(f'data/{ticker}.csv').iloc[2:]
             df = df.astype(float, errors='ignore')
-            df.set_index('Datetime', inplace=True)
-
+        
+            # Handle datetime index robustly
+            if 'Datetime' in df.columns:
+                df.set_index('Datetime', inplace=True)
+            elif 'Date' in df.columns:
+                df.set_index('Date', inplace=True)
+            else:
+                # If no datetime column, use the CSV index
+                df.set_index(df.columns[0], inplace=True)
+        
+            df.index = pd.to_datetime(df.index)
+        
             df["SMA"] = SMA(df)
             df["Simple_Returns"] = df["Close"].pct_change()
             df["Log_Returns"] = np.log1p(df["Simple_Returns"])
             df["Ratios"] = df['Close'] / df["SMA"]
+
 
             ratio_series = df["Ratios"].dropna()
             ratios[ticker] = ratio_series
