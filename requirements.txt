@@ -1,6 +1,7 @@
-alpaca-trade-api
 yfinance
+alpaca-trade-api
+alpha_vantage
 pandas
 numpy
+python-dotenv
 pytz
-alpha_vantage
