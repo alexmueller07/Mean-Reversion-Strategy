@@ -4,7 +4,8 @@ on:
   schedule:
     # Runs at 9:30 AM EST / 13:30 UTC, Monday–Friday
     - cron: '30 13 * * 1-5'
-
+  workflow_dispatch:  
+  
 jobs:
   trade:
     runs-on: ubuntu-latest
