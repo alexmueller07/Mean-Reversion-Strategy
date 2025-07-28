@@ -1,6 +1,6 @@
 yfinance
-alpaca-trade-api
-alpha_vantage
+alpaca-trade-api==3.0.0
+alpha_vantage==2.3.1
 pandas
 numpy
 python-dotenv
