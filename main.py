@@ -26,12 +26,20 @@ current_positions = {ticker: 0 for ticker in TICKERS}
 
 def download_ticker_data(ticker):
     """Download minute-level price data and save as CSV."""
-    data = yf.download(ticker, period="8d", interval="1m", progress=False, auto_adjust=True)
-    data_dir = os.path.join(os.path.dirname(__file__), "data")
-    os.makedirs(data_dir, exist_ok=True)
-    csv_path = os.path.join(data_dir, f"{ticker}.csv")
-    data.to_csv(csv_path)
-    return True
+    try:
+        data = yf.download(ticker, period="8d", interval="1m", progress=False, auto_adjust=True)
+        if data.empty:
+            print(f"⚠️ Warning: No data downloaded for {ticker}. Skipping this ticker.")
+            return False
+
+        data_dir = os.path.join(os.path.dirname(__file__), "data")
+        os.makedirs(data_dir, exist_ok=True)
+        csv_path = os.path.join(data_dir, f"{ticker}.csv")
+        data.to_csv(csv_path)
+        return True
+    except Exception as e:
+        print(f"Error downloading data for {ticker}: {e}")
+        return False
 
 def SMA(data, period=SMA_PERIOD, column="Close"):
     """Calculate Simple Moving Average."""
@@ -39,16 +47,19 @@ def SMA(data, period=SMA_PERIOD, column="Close"):
 
 def close_all_positions():
     """Close all currently open Alpaca positions."""
-    positions = api.list_positions()
-    for position in positions:
-        symbol = position.symbol
-        qty = abs(int(position.qty))
-        side = 'sell' if int(position.qty) > 0 else 'buy'
-        print(f"Closing {symbol} position of {qty} shares ({side})")
-        try:
-            api.submit_order(symbol=symbol, qty=qty, side=side, type='market', time_in_force='day')
-        except Exception as e:
-            print(f"Error closing position on {symbol}: {e}")
+    try:
+        positions = api.list_positions()
+        for position in positions:
+            symbol = position.symbol
+            qty = abs(int(position.qty))
+            side = 'sell' if int(position.qty) > 0 else 'buy'
+            print(f"Closing {symbol} position of {qty} shares ({side})")
+            try:
+                api.submit_order(symbol=symbol, qty=qty, side=side, type='market', time_in_force='day')
+            except Exception as e:
+                print(f"Error closing position on {symbol}: {e}")
+    except Exception as e:
+        print(f"Error fetching positions: {e}")
 
 def main():
     stop_time = dt_time(15, 25)  # 3:25 PM EST
@@ -69,9 +80,14 @@ def main():
         percentile_values = {}
 
         for ticker in TICKERS:
-            df = pd.read_csv(f'data/{ticker}.csv').iloc[2:]
+            csv_path = f'data/{ticker}.csv'
+            if not os.path.exists(csv_path):
+                print(f"Skipping {ticker}: CSV data not available.")
+                continue
 
-            # Convert relevant columns to numeric, coercing errors to NaN
+            df = pd.read_csv(csv_path).iloc[2:]
+
+            # Convert numeric columns safely
             for col in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -82,15 +98,15 @@ def main():
             elif 'Date' in df.columns:
                 df.set_index('Date', inplace=True)
             else:
-                # fallback: first column as index
                 df.set_index(df.columns[0], inplace=True)
 
-            # Convert index to datetime
             df.index = pd.to_datetime(df.index, errors='coerce')
-
-            # Drop rows with invalid datetime index or NaNs in Close
             df = df[~df.index.isna()]
             df = df.dropna(subset=['Close'])
+
+            if df.empty:
+                print(f"⚠️ Skipping {ticker}: Dataframe is empty after cleaning.")
+                continue
 
             # Calculate indicators
             df["SMA"] = SMA(df)
@@ -99,15 +115,19 @@ def main():
             df["Ratios"] = df['Close'] / df["SMA"]
 
             ratio_series = df["Ratios"].dropna()
-            ratios[ticker] = ratio_series
+            if ratio_series.empty:
+                print(f"⚠️ Skipping {ticker}: No valid ratio data.")
+                continue
 
-            # Compute percentile values for ratio
-            percentile_values[ticker] = np.percentile(ratio_series, PERCENTILES)
+            try:
+                percentile_values[ticker] = np.percentile(ratio_series, PERCENTILES)
+            except Exception as e:
+                print(f"Error calculating percentiles for {ticker}: {e}")
+                continue
 
             sell = percentile_values[ticker][-1]
             buy = percentile_values[ticker][0]
 
-            # Determine positions based on ratio percentiles
             df["Positions"] = np.nan
             df.loc[df.Ratios > sell, "Positions"] = -1
             df.loc[df.Ratios < buy, "Positions"] = 1
@@ -121,15 +141,18 @@ def main():
             current_close = df["Close"].iloc[-1]
             current_ratio = df["Ratios"].iloc[-1]
 
-            account = api.get_account()
-            equity = float(account.equity)
+            try:
+                account = api.get_account()
+                equity = float(account.equity)
+            except Exception as e:
+                print(f"Error fetching account equity: {e}")
+                continue
 
             try:
                 if last_pos == 1:
-                    # Prevent division by zero, ensure positive denominator
                     denom = max((buy - percentile_values[ticker][1]), 1e-6)
                     pos_size_pct = 100 * min(2, 0.25 * ((buy - current_ratio) / denom))
-                    pos_size_pct = max(pos_size_pct, 0)  # no negative size
+                    pos_size_pct = max(pos_size_pct, 0)
                     dollar_amt = equity * (pos_size_pct / 100.0)
                     qty = int(dollar_amt // current_close)
 
