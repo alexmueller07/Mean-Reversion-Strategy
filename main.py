@@ -27,7 +27,6 @@ current_positions = {ticker: 0 for ticker in TICKERS}
 def download_ticker_data(ticker):
     """Download minute-level price data and save as CSV."""
     data = yf.download(ticker, period="8d", interval="1m", progress=False, auto_adjust=True)
-    data['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     data_dir = os.path.join(os.path.dirname(__file__), "data")
     os.makedirs(data_dir, exist_ok=True)
     csv_path = os.path.join(data_dir, f"{ticker}.csv")
@@ -71,38 +70,53 @@ def main():
 
         for ticker in TICKERS:
             df = pd.read_csv(f'data/{ticker}.csv').iloc[2:]
-            df = df.astype(float, errors='ignore')
-        
-            # Handle datetime index robustly
+
+            # Convert relevant columns to numeric, coercing errors to NaN
+            for col in ["Open", "High", "Low", "Close", "Adj Close", "Volume"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # Set datetime index robustly
             if 'Datetime' in df.columns:
                 df.set_index('Datetime', inplace=True)
             elif 'Date' in df.columns:
                 df.set_index('Date', inplace=True)
             else:
-                # If no datetime column, use the CSV index
+                # fallback: first column as index
                 df.set_index(df.columns[0], inplace=True)
-        
-            df.index = pd.to_datetime(df.index)
-        
+
+            # Convert index to datetime
+            df.index = pd.to_datetime(df.index, errors='coerce')
+
+            # Drop rows with invalid datetime index or NaNs in Close
+            df = df[~df.index.isna()]
+            df = df.dropna(subset=['Close'])
+
+            # Calculate indicators
             df["SMA"] = SMA(df)
             df["Simple_Returns"] = df["Close"].pct_change()
             df["Log_Returns"] = np.log1p(df["Simple_Returns"])
             df["Ratios"] = df['Close'] / df["SMA"]
 
-
             ratio_series = df["Ratios"].dropna()
             ratios[ticker] = ratio_series
+
+            # Compute percentile values for ratio
             percentile_values[ticker] = np.percentile(ratio_series, PERCENTILES)
 
             sell = percentile_values[ticker][-1]
             buy = percentile_values[ticker][0]
 
-            df["Positions"] = np.where(df.Ratios > sell, -1, np.nan)
-            df["Positions"] = np.where(df.Ratios < buy, 1, df["Positions"])
+            # Determine positions based on ratio percentiles
+            df["Positions"] = np.nan
+            df.loc[df.Ratios > sell, "Positions"] = -1
+            df.loc[df.Ratios < buy, "Positions"] = 1
+
             df["Buy"] = np.where(df.Positions == 1, df["Close"], np.nan)
             df["Sell"] = np.where(df.Positions == -1, df["Close"], np.nan)
 
             dataframes[ticker] = df
+
             last_pos = df["Positions"].iloc[-1]
             current_close = df["Close"].iloc[-1]
             current_ratio = df["Ratios"].iloc[-1]
@@ -112,7 +126,10 @@ def main():
 
             try:
                 if last_pos == 1:
-                    pos_size_pct = 100 * min(2, 0.25 * ((buy - current_ratio) / max((buy - percentile_values[ticker][1]), 1e-6)))
+                    # Prevent division by zero, ensure positive denominator
+                    denom = max((buy - percentile_values[ticker][1]), 1e-6)
+                    pos_size_pct = 100 * min(2, 0.25 * ((buy - current_ratio) / denom))
+                    pos_size_pct = max(pos_size_pct, 0)  # no negative size
                     dollar_amt = equity * (pos_size_pct / 100.0)
                     qty = int(dollar_amt // current_close)
 
@@ -127,7 +144,9 @@ def main():
                         print(f"Opened LONG position for {ticker}: {qty} shares at ${current_close:.2f}")
 
                 elif last_pos == -1:
-                    pos_size_pct = 100 * min(2, 0.25 * ((current_ratio - sell) / max((percentile_values[ticker][3] - sell), 1e-6)))
+                    denom = max((percentile_values[ticker][3] - sell), 1e-6)
+                    pos_size_pct = 100 * min(2, 0.25 * ((current_ratio - sell) / denom))
+                    pos_size_pct = max(pos_size_pct, 0)
                     dollar_amt = equity * (pos_size_pct / 100.0)
                     qty = int(dollar_amt // current_close)
 
